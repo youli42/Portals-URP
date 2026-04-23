@@ -171,24 +171,74 @@ public class Portal : MonoBehaviour
         }
     }
 
+    // 生命周期管理（防泄漏） 
+    // 依据：RenderTexture 是非托管资源，组件禁用或销毁时必须手动清理，防止场景切换导致显存泄漏。
+    void OnDisable()
+    {
+        ReleaseTextures();
+    }
+
+    void OnDestroy()
+    {
+        ReleaseTextures();
+    }
     #region 功能函数
 
     // 创建 RT、将摄像机画面赋值给纹理
+    // ================= 替换原有的 CreateViewTexture =================
     void CreateViewTexture()
     {
-        // 如果 RenderTexture 不存在或屏幕尺寸改变，则重新创建
-        if (viewTexture == null || tempTexture == null || viewTexture.width != Screen.width || viewTexture.height != Screen.height)
+        // 步骤 1：判断是否需要重建纹理
+        // 依据：当 viewTexture 不存在、屏幕分辨率改变，或开启嵌套但临时缓冲未分配时，必须触发重建。
+        bool requiresRebuild = (viewTexture == null || viewTexture.width != Screen.width || viewTexture.height != Screen.height);
+
+        if (AllowNestingPortal && tempTexture == null)
         {
+            requiresRebuild = true;
+        }
+
+        // 步骤 2：执行重建逻辑
+        if (requiresRebuild)
+        {
+            // 释放旧资源
             if (viewTexture != null) viewTexture.Release();
             if (tempTexture != null) tempTexture.Release();
 
+            // viewTexture 是无论是否嵌套都必须存在的基础渲染目标
             viewTexture = new RenderTexture(Screen.width, Screen.height, 24);
-            tempTexture = new RenderTexture(Screen.width, Screen.height, 24); // fix:增加实例化
-
             portalCam.targetTexture = viewTexture;
-
-            // 将此纹理显示在链接传送门的材质上（即玩家看到的画面）
             linkedPortal.screen.material.SetTexture("_MainTex", viewTexture);
+
+            // 依据：仅在允许嵌套时，才分配双缓冲需要的 tempTexture，严格控制显存开销
+            if (AllowNestingPortal)
+            {
+                tempTexture = new RenderTexture(Screen.width, Screen.height, 24);
+            }
+        }
+        // 步骤 3：运行时动态释放机制
+        // 依据：排查潜在的性能浪费。如果游戏运行中途，开关被脚本或 Inspector 动态关闭，
+        // 必须主动释放不再使用的 tempTexture，而不是等 GC 回收。
+        else if (!AllowNestingPortal && tempTexture != null)
+        {
+            tempTexture.Release();
+            Destroy(tempTexture);
+            tempTexture = null;
+        }
+    }
+
+    void ReleaseTextures()
+    {
+        if (viewTexture != null)
+        {
+            viewTexture.Release();
+            Destroy(viewTexture);
+            viewTexture = null;
+        }
+        if (tempTexture != null)
+        {
+            tempTexture.Release();
+            Destroy(tempTexture);
+            tempTexture = null;
         }
     }
 
