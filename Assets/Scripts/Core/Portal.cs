@@ -2,319 +2,402 @@
 using System.Collections.Generic;
 using UnityEngine;
 
-public class Portal : MonoBehaviour {
-    [Header ("Main Settings")]
-    public Portal linkedPortal;
-    public MeshRenderer screen;
-    public int recursionLimit = 5;
+public class Portal : MonoBehaviour
+{
+    [Header("Main Settings")]
+    public Portal linkedPortal; // 链接的另一个传送门
+    public MeshRenderer screen; // 传送门的显示屏幕
+    public int recursionLimit = 5; // 递归渲染限制，决定你能通过传送门看到多少层“门中门”
 
-    [Header ("Advanced Settings")]
-    public float nearClipOffset = 0.05f;
-    public float nearClipLimit = 0.2f;
+    [Header("Advanced Settings")]
+    public float nearClipOffset = 0.05f; // 斜向裁剪面的偏移量，防止产生 Z-fighting
+    public float nearClipLimit = 0.2f;   // 裁剪平面安全阈值，相机离门太近时，禁用斜向裁剪，避免严重画面畸变。
 
-    // Private variables
+    // 私有变量
     RenderTexture viewTexture;
-    Camera portalCam;
-    Camera playerCam;
-    Material firstRecursionMat;
-    List<PortalTraveller> trackedTravellers;
-    MeshFilter screenMeshFilter;
+    Camera portalCam; // 传送门专用摄像机
+    Camera playerCam; // 玩家摄像机
+    Material firstRecursionMat; // 递归时，优化第一层门的渲染效果
+    List<PortalTraveller> trackedTravellers; // 列表，记录所有正在穿过门的物体
+    MeshFilter screenMeshFilter; // 传送门边界，在递归渲染时用于剔除
 
-    void Awake () {
+    // 初始化：相机、禁用传送门相机自动渲染、物体列表
+    // 自带函数，被唤醒的第一时间执行
+    void Awake()
+    {
         playerCam = Camera.main;
-        portalCam = GetComponentInChildren<Camera> ();
-        portalCam.enabled = false;
-        trackedTravellers = new List<PortalTraveller> ();
-        screenMeshFilter = screen.GetComponent<MeshFilter> ();
-        screen.material.SetInt ("displayMask", 1);
+        portalCam = GetComponentInChildren<Camera>();
+        portalCam.enabled = false; // 禁用摄像机，将通过脚本手动调用 Render()
+        trackedTravellers = new List<PortalTraveller>();
+        screenMeshFilter = screen.GetComponent<MeshFilter>();
+        // 设置初始遮罩，用于处理递归渲染时的显示层级
+        screen.material.SetInt("displayMask", 1);
+    }
+    // 更新正在穿过门的物体（只调用HandleTravellers()）
+    void LateUpdate()
+    {
+        HandleTravellers();
     }
 
-    void LateUpdate () {
-        HandleTravellers ();
-    }
-
-    void HandleTravellers () {
-
-        for (int i = 0; i < trackedTravellers.Count; i++) {
+    // 处理正在穿过门的物体：
+    // 穿过了：传送到对面
+    // 没穿过：实时显示（传送到那边，并在这边保留一个复制体）
+    void HandleTravellers()
+    {
+        // 遍历所有正在通过传送门的物体
+        for (int i = 0; i < trackedTravellers.Count; i++)
+        {
             PortalTraveller traveller = trackedTravellers[i];
             Transform travellerT = traveller.transform;
+
+            /* * 核心矩阵转换：
+             * 将物体从当前传送门的本地空间转换到链接传送门的对应位置。
+             * 计算公式：目标世界矩阵 = 链接门世界矩阵 * 当前门逆矩阵 * 物体当前世界矩阵
+             */
             var m = linkedPortal.transform.localToWorldMatrix * transform.worldToLocalMatrix * travellerT.localToWorldMatrix;
 
             Vector3 offsetFromPortal = travellerT.position - transform.position;
-            int portalSide = System.Math.Sign (Vector3.Dot (offsetFromPortal, transform.forward));
-            int portalSideOld = System.Math.Sign (Vector3.Dot (traveller.previousOffsetFromPortal, transform.forward));
-            // Teleport the traveller if it has crossed from one side of the portal to the other
-            if (portalSide != portalSideOld) {
+            int portalSide = System.Math.Sign(Vector3.Dot(offsetFromPortal, transform.forward));
+            int portalSideOld = System.Math.Sign(Vector3.Dot(traveller.previousOffsetFromPortal, transform.forward));
+
+            // 如果物体从传送门的一侧跨越到了另一侧，则执行传送
+            if (portalSide != portalSideOld)
+            {
                 var positionOld = travellerT.position;
                 var rotOld = travellerT.rotation;
-                traveller.Teleport (transform, linkedPortal.transform, m.GetColumn (3), m.rotation);
-                traveller.graphicsClone.transform.SetPositionAndRotation (positionOld, rotOld);
-                // Can't rely on OnTriggerEnter/Exit to be called next frame since it depends on when FixedUpdate runs
-                linkedPortal.OnTravellerEnterPortal (traveller);
-                trackedTravellers.RemoveAt (i);
+
+                // 调用物体的传送逻辑（更新位置和旋转）
+                traveller.Teleport(transform, linkedPortal.transform, m.GetColumn(3), m.rotation);
+                // 传送后，为了视觉连贯性，将克隆体移动到传送前的位置
+                traveller.graphicsClone.transform.SetPositionAndRotation(positionOld, rotOld);
+
+                // 不能依赖 OnTriggerEnter/Exit，因为它们依赖于 FixedUpdate 的运行时间，手动触发进入逻辑
+                linkedPortal.OnTravellerEnterPortal(traveller);
+                trackedTravellers.RemoveAt(i);
                 i--;
 
-            } else {
-                traveller.graphicsClone.transform.SetPositionAndRotation (m.GetColumn (3), m.rotation);
-                //UpdateSliceParams (traveller);
+            }
+            else
+            {
+                // 如果还未穿过，则更新克隆体在另一侧门的位置，使其看起来像是从那边出来的
+                traveller.graphicsClone.transform.SetPositionAndRotation(m.GetColumn(3), m.rotation);
                 traveller.previousOffsetFromPortal = offsetFromPortal;
             }
         }
     }
 
-    // Called before any portal cameras are rendered for the current frame
-    public void PrePortalRender () {
-        foreach (var traveller in trackedTravellers) {
-            UpdateSliceParams (traveller);
+    // 在本帧任何传送门摄像机开始渲染之前调用
+    public void PrePortalRender()
+    {
+        foreach (var traveller in trackedTravellers)
+        {
+            UpdateSliceParams(traveller);
         }
     }
 
-    // Manually render the camera attached to this portal
-    // Called after PrePortalRender, and before PostPortalRender
-    public void Render () {
+    // 手动渲染此传送门挂载的摄像机
+    // 调用顺序在 PrePortalRender 之后，PostPortalRender 之前
+    public void Render()
+    {
 
-        // Skip rendering the view from this portal if player is not looking at the linked portal
-        if (!CameraUtility.VisibleFromCamera (linkedPortal.screen, playerCam)) {
+        // 如果玩家摄像机看不到链接的那个传送门屏幕，则跳过本次渲染以节省性能
+        if (!CameraUtility.VisibleFromCamera(linkedPortal.screen, playerCam))
+        {
             return;
         }
 
-        CreateViewTexture ();
+        CreateViewTexture();
 
         var localToWorldMatrix = playerCam.transform.localToWorldMatrix;
         var renderPositions = new Vector3[recursionLimit];
         var renderRotations = new Quaternion[recursionLimit];
 
         int startIndex = 0;
-        portalCam.projectionMatrix = playerCam.projectionMatrix;
-        for (int i = 0; i < recursionLimit; i++) {
-            if (i > 0) {
-                // No need for recursive rendering if linked portal is not visible through this portal
-                if (!CameraUtility.BoundsOverlap (screenMeshFilter, linkedPortal.screenMeshFilter, portalCam)) {
+        portalCam.projectionMatrix = playerCam.projectionMatrix; // 同步摄像机投影矩阵
+
+        // 递归逻辑：计算每一层递归中摄像机应该处于的位置和旋转
+        for (int i = 0; i < recursionLimit; i++)
+        {
+            if (i > 0)
+            {
+                // 如果通过当前门看不到链接门的屏幕，则停止更深层次的递归计算
+                if (!CameraUtility.BoundsOverlap(screenMeshFilter, linkedPortal.screenMeshFilter, portalCam))
+                {
                     break;
                 }
             }
+            // 每进一层递归，都要应用一次相对空间变换
             localToWorldMatrix = transform.localToWorldMatrix * linkedPortal.transform.worldToLocalMatrix * localToWorldMatrix;
             int renderOrderIndex = recursionLimit - i - 1;
-            renderPositions[renderOrderIndex] = localToWorldMatrix.GetColumn (3);
+            renderPositions[renderOrderIndex] = localToWorldMatrix.GetColumn(3);
             renderRotations[renderOrderIndex] = localToWorldMatrix.rotation;
 
-            portalCam.transform.SetPositionAndRotation (renderPositions[renderOrderIndex], renderRotations[renderOrderIndex]);
+            portalCam.transform.SetPositionAndRotation(renderPositions[renderOrderIndex], renderRotations[renderOrderIndex]);
             startIndex = renderOrderIndex;
         }
 
-        // Hide screen so that camera can see through portal
+        // 暂时隐藏传送门屏幕，这样摄像机才能“看穿”过去
         screen.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.ShadowsOnly;
-        linkedPortal.screen.material.SetInt ("displayMask", 0);
+        linkedPortal.screen.material.SetInt("displayMask", 0);
 
-        for (int i = startIndex; i < recursionLimit; i++) {
-            portalCam.transform.SetPositionAndRotation (renderPositions[i], renderRotations[i]);
-            SetNearClipPlane ();
-            HandleClipping ();
-            portalCam.Render ();
+        // 按照从深到浅的顺序进行渲染（先画最远处的递归画面）
+        for (int i = startIndex; i < recursionLimit; i++)
+        {
+            portalCam.transform.SetPositionAndRotation(renderPositions[i], renderRotations[i]);
+            SetNearClipPlane(); // 设置斜向裁剪面
+            HandleClipping();   // 处理物体被门切断的视觉效果
+            portalCam.Render();
 
-            if (i == startIndex) {
-                linkedPortal.screen.material.SetInt ("displayMask", 1);
+            if (i == startIndex)
+            {
+                linkedPortal.screen.material.SetInt("displayMask", 1);
             }
         }
 
-        // Unhide objects hidden at start of render
+        // 渲染结束后恢复屏幕显示
         screen.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.On;
     }
+    // 修复物体穿越问题
+    void HandleClipping()
+    {
+        // 在切片处理（Slicing）物体时有两个主要的图形问题：
+        // 1. 传送门背面可能会画出微小的网格碎片。
+        //    理想情况下斜裁剪面（Oblique clip plane）应该能解决，但即使偏移为 0 仍可能可见。
+        // 2. 切片网格与传送门屏幕渲染的模型之间可能存在微小的缝隙。
+        // 此函数尝试通过在渲染视图时修改切片参数来解决这些问题。
+        // 如果有更优雅的方法就好了，但目前这是我能想到的最佳方案。
 
-    void HandleClipping () {
-        // There are two main graphical issues when slicing travellers
-        // 1. Tiny sliver of mesh drawn on backside of portal
-        //    Ideally the oblique clip plane would sort this out, but even with 0 offset, tiny sliver still visible
-        // 2. Tiny seam between the sliced mesh, and the rest of the model drawn onto the portal screen
-        // This function tries to address these issues by modifying the slice parameters when rendering the view from the portal
-        // Would be great if this could be fixed more elegantly, but this is the best I can figure out for now
         const float hideDst = -1000;
         const float showDst = 1000;
-        float screenThickness = linkedPortal.ProtectScreenFromClipping (portalCam.transform.position);
+        float screenThickness = linkedPortal.ProtectScreenFromClipping(portalCam.transform.position);
 
-        foreach (var traveller in trackedTravellers) {
-            if (SameSideOfPortal (traveller.transform.position, portalCamPos)) {
-                // Addresses issue 1
-                traveller.SetSliceOffsetDst (hideDst, false);
-            } else {
-                // Addresses issue 2
-                traveller.SetSliceOffsetDst (showDst, false);
+        foreach (var traveller in trackedTravellers)
+        {
+            if (SameSideOfPortal(traveller.transform.position, portalCamPos))
+            {
+                // 解决问题 1：完全隐藏位于摄像机同侧的物体部分
+                traveller.SetSliceOffsetDst(hideDst, false);
+            }
+            else
+            {
+                // 解决问题 2：完全显示位于另一侧的部分
+                traveller.SetSliceOffsetDst(showDst, false);
             }
 
-            // Ensure clone is properly sliced, in case it's visible through this portal:
-            int cloneSideOfLinkedPortal = -SideOfPortal (traveller.transform.position);
-            bool camSameSideAsClone = linkedPortal.SideOfPortal (portalCamPos) == cloneSideOfLinkedPortal;
-            if (camSameSideAsClone) {
-                traveller.SetSliceOffsetDst (screenThickness, true);
-            } else {
-                traveller.SetSliceOffsetDst (-screenThickness, true);
+            // 确保克隆体在通过此门可见时也被正确切片：
+            int cloneSideOfLinkedPortal = -SideOfPortal(traveller.transform.position);
+            bool camSameSideAsClone = linkedPortal.SideOfPortal(portalCamPos) == cloneSideOfLinkedPortal;
+            if (camSameSideAsClone)
+            {
+                traveller.SetSliceOffsetDst(screenThickness, true);
+            }
+            else
+            {
+                traveller.SetSliceOffsetDst(-screenThickness, true);
             }
         }
 
         var offsetFromPortalToCam = portalCamPos - transform.position;
-        foreach (var linkedTraveller in linkedPortal.trackedTravellers) {
+        foreach (var linkedTraveller in linkedPortal.trackedTravellers)
+        {
             var travellerPos = linkedTraveller.graphicsObject.transform.position;
             var clonePos = linkedTraveller.graphicsClone.transform.position;
-            // Handle clone of linked portal coming through this portal:
-            bool cloneOnSameSideAsCam = linkedPortal.SideOfPortal (travellerPos) != SideOfPortal (portalCamPos);
-            if (cloneOnSameSideAsCam) {
-                // Addresses issue 1
-                linkedTraveller.SetSliceOffsetDst (hideDst, true);
-            } else {
-                // Addresses issue 2
-                linkedTraveller.SetSliceOffsetDst (showDst, true);
+
+            // 处理链接门的克隆体通过当前门的情况：
+            bool cloneOnSameSideAsCam = linkedPortal.SideOfPortal(travellerPos) != SideOfPortal(portalCamPos);
+            if (cloneOnSameSideAsCam)
+            {
+                linkedTraveller.SetSliceOffsetDst(hideDst, true);
+            }
+            else
+            {
+                linkedTraveller.SetSliceOffsetDst(showDst, true);
             }
 
-            // Ensure traveller of linked portal is properly sliced, in case it's visible through this portal:
-            bool camSameSideAsTraveller = linkedPortal.SameSideOfPortal (linkedTraveller.transform.position, portalCamPos);
-            if (camSameSideAsTraveller) {
-                linkedTraveller.SetSliceOffsetDst (screenThickness, false);
-            } else {
-                linkedTraveller.SetSliceOffsetDst (-screenThickness, false);
+            // 确保链接门的穿越者在可见时被正确切片：
+            bool camSameSideAsTraveller = linkedPortal.SameSideOfPortal(linkedTraveller.transform.position, portalCamPos);
+            if (camSameSideAsTraveller)
+            {
+                linkedTraveller.SetSliceOffsetDst(screenThickness, false);
+            }
+            else
+            {
+                linkedTraveller.SetSliceOffsetDst(-screenThickness, false);
             }
         }
     }
 
-    // Called once all portals have been rendered, but before the player camera renders
-    public void PostPortalRender () {
-        foreach (var traveller in trackedTravellers) {
-            UpdateSliceParams (traveller);
+    // 在所有传送门渲染完毕，但在玩家摄像机渲染之前调用
+    public void PostPortalRender()
+    {
+        foreach (var traveller in trackedTravellers)
+        {
+            UpdateSliceParams(traveller);
         }
-        ProtectScreenFromClipping (playerCam.transform.position);
+        ProtectScreenFromClipping(playerCam.transform.position);
     }
-    void CreateViewTexture () {
-        if (viewTexture == null || viewTexture.width != Screen.width || viewTexture.height != Screen.height) {
-            if (viewTexture != null) {
-                viewTexture.Release ();
+
+    // 创建 RT、将摄像机画面赋值给纹理
+    void CreateViewTexture()
+    {
+        // 如果 RenderTexture 不存在或屏幕尺寸改变，则重新创建
+        if (viewTexture == null || viewTexture.width != Screen.width || viewTexture.height != Screen.height)
+        {
+            if (viewTexture != null)
+            {
+                viewTexture.Release();
             }
-            viewTexture = new RenderTexture (Screen.width, Screen.height, 0);
-            // Render the view from the portal camera to the view texture
+            viewTexture = new RenderTexture(Screen.width, Screen.height, 0);
+            // 将传送门摄像机的视图渲染到纹理：指定 viewTexture 为 portalCam 的渲染输出目标
             portalCam.targetTexture = viewTexture;
-            // Display the view texture on the screen of the linked portal
-            linkedPortal.screen.material.SetTexture ("_MainTex", viewTexture);
+            // 将此纹理显示在链接传送门的材质上（即玩家看到的画面）
+            linkedPortal.screen.material.SetTexture("_MainTex", viewTexture);
         }
     }
 
-    // Sets the thickness of the portal screen so as not to clip with camera near plane when player goes through
-    float ProtectScreenFromClipping (Vector3 viewPoint) {
-        float halfHeight = playerCam.nearClipPlane * Mathf.Tan (playerCam.fieldOfView * 0.5f * Mathf.Deg2Rad);
+    // 设置传送门屏幕的厚度，防止玩家穿过时摄像机近裁剪面与屏幕发生裁剪（穿模）
+    float ProtectScreenFromClipping(Vector3 viewPoint)
+    {
+        // 根据摄像机参数计算近裁剪面的对角线距离
+        float halfHeight = playerCam.nearClipPlane * Mathf.Tan(playerCam.fieldOfView * 0.5f * Mathf.Deg2Rad);
         float halfWidth = halfHeight * playerCam.aspect;
-        float dstToNearClipPlaneCorner = new Vector3 (halfWidth, halfHeight, playerCam.nearClipPlane).magnitude;
+        float dstToNearClipPlaneCorner = new Vector3(halfWidth, halfHeight, playerCam.nearClipPlane).magnitude;
         float screenThickness = dstToNearClipPlaneCorner;
 
         Transform screenT = screen.transform;
-        bool camFacingSameDirAsPortal = Vector3.Dot (transform.forward, transform.position - viewPoint) > 0;
-        screenT.localScale = new Vector3 (screenT.localScale.x, screenT.localScale.y, screenThickness);
+        bool camFacingSameDirAsPortal = Vector3.Dot(transform.forward, transform.position - viewPoint) > 0;
+        // 动态调整屏幕物体的缩放和位置，使其略微“凸出”或“凹进”
+        screenT.localScale = new Vector3(screenT.localScale.x, screenT.localScale.y, screenThickness);
         screenT.localPosition = Vector3.forward * screenThickness * ((camFacingSameDirAsPortal) ? 0.5f : -0.5f);
         return screenThickness;
     }
 
-    void UpdateSliceParams (PortalTraveller traveller) {
-        // Calculate slice normal
-        int side = SideOfPortal (traveller.transform.position);
+    // 更新穿越的材质
+    void UpdateSliceParams(PortalTraveller traveller)
+    {
+        // 计算切片法线
+        int side = SideOfPortal(traveller.transform.position);
         Vector3 sliceNormal = transform.forward * -side;
         Vector3 cloneSliceNormal = linkedPortal.transform.forward * side;
 
-        // Calculate slice centre
+        // 计算切片中心点
         Vector3 slicePos = transform.position;
         Vector3 cloneSlicePos = linkedPortal.transform.position;
 
-        // Adjust slice offset so that when player standing on other side of portal to the object, the slice doesn't clip through
+        // 调整切片偏移，当玩家站在物体另一侧时，确保切片不会穿透
         float sliceOffsetDst = 0;
         float cloneSliceOffsetDst = 0;
         float screenThickness = screen.transform.localScale.z;
 
-        bool playerSameSideAsTraveller = SameSideOfPortal (playerCam.transform.position, traveller.transform.position);
-        if (!playerSameSideAsTraveller) {
+        bool playerSameSideAsTraveller = SameSideOfPortal(playerCam.transform.position, traveller.transform.position);
+        if (!playerSameSideAsTraveller)
+        {
             sliceOffsetDst = -screenThickness;
         }
-        bool playerSameSideAsCloneAppearing = side != linkedPortal.SideOfPortal (playerCam.transform.position);
-        if (!playerSameSideAsCloneAppearing) {
+        bool playerSameSideAsCloneAppearing = side != linkedPortal.SideOfPortal(playerCam.transform.position);
+        if (!playerSameSideAsCloneAppearing)
+        {
             cloneSliceOffsetDst = -screenThickness;
         }
 
-        // Apply parameters
-        for (int i = 0; i < traveller.originalMaterials.Length; i++) {
-            traveller.originalMaterials[i].SetVector ("sliceCentre", slicePos);
-            traveller.originalMaterials[i].SetVector ("sliceNormal", sliceNormal);
-            traveller.originalMaterials[i].SetFloat ("sliceOffsetDst", sliceOffsetDst);
+        // 将参数应用到旅行者及其克隆体的材质上（通常是 Shader 中的变量）
+        for (int i = 0; i < traveller.originalMaterials.Length; i++)
+        {
+            traveller.originalMaterials[i].SetVector("sliceCentre", slicePos);
+            traveller.originalMaterials[i].SetVector("sliceNormal", sliceNormal);
+            traveller.originalMaterials[i].SetFloat("sliceOffsetDst", sliceOffsetDst);
 
-            traveller.cloneMaterials[i].SetVector ("sliceCentre", cloneSlicePos);
-            traveller.cloneMaterials[i].SetVector ("sliceNormal", cloneSliceNormal);
-            traveller.cloneMaterials[i].SetFloat ("sliceOffsetDst", cloneSliceOffsetDst);
-
+            traveller.cloneMaterials[i].SetVector("sliceCentre", cloneSlicePos);
+            traveller.cloneMaterials[i].SetVector("sliceNormal", cloneSliceNormal);
+            traveller.cloneMaterials[i].SetFloat("sliceOffsetDst", cloneSliceOffsetDst);
         }
-
     }
 
-    // Use custom projection matrix to align portal camera's near clip plane with the surface of the portal
-    // Note that this affects precision of the depth buffer, which can cause issues with effects like screenspace AO
-    void SetNearClipPlane () {
-        // Learning resource:
-        // http://www.terathon.com/lengyel/Lengyel-Oblique.pdf
+    // 使用自定义投影矩阵，使传送门摄像机的近裁剪面与传送门表面重合
+    // 注意：这会影响深度缓冲区的精度，可能导致屏幕空间 AO 等效果出现问题
+    void SetNearClipPlane()
+    {
+        // 学习资源：http://www.terathon.com/lengyel/Lengyel-Oblique.pdf
         Transform clipPlane = transform;
-        int dot = System.Math.Sign (Vector3.Dot (clipPlane.forward, transform.position - portalCam.transform.position));
+        int dot = System.Math.Sign(Vector3.Dot(clipPlane.forward, transform.position - portalCam.transform.position));
 
-        Vector3 camSpacePos = portalCam.worldToCameraMatrix.MultiplyPoint (clipPlane.position);
-        Vector3 camSpaceNormal = portalCam.worldToCameraMatrix.MultiplyVector (clipPlane.forward) * dot;
-        float camSpaceDst = -Vector3.Dot (camSpacePos, camSpaceNormal) + nearClipOffset;
+        Vector3 camSpacePos = portalCam.worldToCameraMatrix.MultiplyPoint(clipPlane.position);
+        Vector3 camSpaceNormal = portalCam.worldToCameraMatrix.MultiplyVector(clipPlane.forward) * dot;
+        float camSpaceDst = -Vector3.Dot(camSpacePos, camSpaceNormal) + nearClipOffset;
 
-        // Don't use oblique clip plane if very close to portal as it seems this can cause some visual artifacts
-        if (Mathf.Abs (camSpaceDst) > nearClipLimit) {
-            Vector4 clipPlaneCameraSpace = new Vector4 (camSpaceNormal.x, camSpaceNormal.y, camSpaceNormal.z, camSpaceDst);
+        // 如果距离传送门非常近，不要使用斜裁剪面，否则会产生严重的视觉伪影
+        if (Mathf.Abs(camSpaceDst) > nearClipLimit)
+        {
+            Vector4 clipPlaneCameraSpace = new Vector4(camSpaceNormal.x, camSpaceNormal.y, camSpaceNormal.z, camSpaceDst);
 
-            // Update projection based on new clip plane
-            // Calculate matrix with player cam so that player camera settings (fov, etc) are used
-            portalCam.projectionMatrix = playerCam.CalculateObliqueMatrix (clipPlaneCameraSpace);
-        } else {
+            // 基于新的裁剪平面更新投影矩阵
+            // 使用玩家摄像机的设置计算，以保证 FOV 等参数一致
+            portalCam.projectionMatrix = playerCam.CalculateObliqueMatrix(clipPlaneCameraSpace);
+        }
+        else
+        {
             portalCam.projectionMatrix = playerCam.projectionMatrix;
         }
     }
 
-    void OnTravellerEnterPortal (PortalTraveller traveller) {
-        if (!trackedTravellers.Contains (traveller)) {
-            traveller.EnterPortalThreshold ();
+    void OnTravellerEnterPortal(PortalTraveller traveller)
+    {
+        if (!trackedTravellers.Contains(traveller))
+        {
+            traveller.EnterPortalThreshold();
             traveller.previousOffsetFromPortal = traveller.transform.position - transform.position;
-            trackedTravellers.Add (traveller);
+            trackedTravellers.Add(traveller);
         }
     }
 
-    void OnTriggerEnter (Collider other) {
-        var traveller = other.GetComponent<PortalTraveller> ();
-        if (traveller) {
-            OnTravellerEnterPortal (traveller);
+    void OnTriggerEnter(Collider other)
+    {
+        var traveller = other.GetComponent<PortalTraveller>();
+        if (traveller)
+        {
+            OnTravellerEnterPortal(traveller);
         }
     }
 
-    void OnTriggerExit (Collider other) {
-        var traveller = other.GetComponent<PortalTraveller> ();
-        if (traveller && trackedTravellers.Contains (traveller)) {
-            traveller.ExitPortalThreshold ();
-            trackedTravellers.Remove (traveller);
+    void OnTriggerExit(Collider other)
+    {
+        var traveller = other.GetComponent<PortalTraveller>();
+        if (traveller && trackedTravellers.Contains(traveller))
+        {
+            traveller.ExitPortalThreshold();
+            trackedTravellers.Remove(traveller);
         }
     }
 
-    /*
-     ** Some helper/convenience stuff:
-     */
+    #region 一些辅助工具
 
-    int SideOfPortal (Vector3 pos) {
-        return System.Math.Sign (Vector3.Dot (pos - transform.position, transform.forward));
+    // 判断点在传送门的哪一侧
+    int SideOfPortal(Vector3 pos)
+    {
+        return System.Math.Sign(Vector3.Dot(pos - transform.position, transform.forward));
     }
 
-    bool SameSideOfPortal (Vector3 posA, Vector3 posB) {
-        return SideOfPortal (posA) == SideOfPortal (posB);
+    // 判断两个点是否在传送门的同一侧
+    bool SameSideOfPortal(Vector3 posA, Vector3 posB)
+    {
+        return SideOfPortal(posA) == SideOfPortal(posB);
     }
 
-    Vector3 portalCamPos {
-        get {
+    Vector3 portalCamPos
+    {
+        get
+        {
             return portalCam.transform.position;
         }
     }
 
-    void OnValidate () {
-        if (linkedPortal != null) {
+    // 在 Unity 编辑器中修改属性时自动关联双向链接
+    void OnValidate()
+    {
+        if (linkedPortal != null)
+        {
             linkedPortal.linkedPortal = this;
         }
     }
+    #endregion 一些辅助工具
 }

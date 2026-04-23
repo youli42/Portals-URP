@@ -2,7 +2,7 @@
 {
     Properties
     {
-        _InactiveColour ("Inactive Colour", Color) = (1, 1, 1, 1)
+        _InactiveColour ("Inactive Colour", Color) = (1, 1, 1, 1) // 非活动状态颜色
     }
     SubShader
     {
@@ -30,7 +30,7 @@
 
             sampler2D _MainTex;
             float4 _InactiveColour;
-            int displayMask; // set to 1 to display texture, otherwise will draw test colour
+            int displayMask; // 设为1时显示纹理，否则将绘制测试颜色
             
 
             v2f vert (appdata v)
