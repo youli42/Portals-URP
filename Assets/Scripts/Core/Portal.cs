@@ -154,7 +154,7 @@ public class Portal : MonoBehaviour
             {
                 viewTexture.Release();
             }
-            viewTexture = new RenderTexture(Screen.width, Screen.height, 0);
+            viewTexture = new RenderTexture(Screen.width, Screen.height, 24); // fix：使用 24 位深度，确保不会被天空覆盖
             // 将传送门摄像机的视图渲染到纹理：指定 viewTexture 为 portalCam 的渲染输出目标
             portalCam.targetTexture = viewTexture;
             // 将此纹理显示在链接传送门的材质上（即玩家看到的画面）
@@ -367,6 +367,9 @@ public class Portal : MonoBehaviour
     void SetNearClipPlane()
     {
         // 学习资源：http://www.terathon.com/lengyel/Lengyel-Oblique.pdf
+
+        // 如果裁切面出错，可以强制摄像机根据最新的 Transform 同步矩阵，防止使用上一帧的旧矩阵计算裁剪面
+        // portalCam.ResetWorldToCameraMatrix();
 
         // 确定传送门相对摄像机方向
         // 传送门有正反面之分。
