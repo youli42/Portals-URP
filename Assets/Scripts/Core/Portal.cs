@@ -33,57 +33,11 @@ public class Portal : MonoBehaviour
         // 设置初始遮罩，用于处理递归渲染时的显示层级
         screen.material.SetInt("displayMask", 1);
     }
+
     // 更新正在穿过门的物体（只调用HandleTravellers()）
     void LateUpdate()
     {
         HandleTravellers();
-    }
-
-    // 处理正在穿过门的物体：
-    // 穿过了：传送到对面
-    // 没穿过：实时显示（传送到那边，并在这边保留一个复制体）
-    void HandleTravellers()
-    {
-        // 遍历所有正在通过传送门的物体
-        for (int i = 0; i < trackedTravellers.Count; i++)
-        {
-            PortalTraveller traveller = trackedTravellers[i];
-            Transform travellerT = traveller.transform;
-
-            /* * 核心矩阵转换：
-             * 将物体从当前传送门的本地空间转换到链接传送门的对应位置。
-             * 计算公式：目标世界矩阵 = 链接门世界矩阵 * 当前门逆矩阵 * 物体当前世界矩阵
-             */
-            var m = linkedPortal.transform.localToWorldMatrix * transform.worldToLocalMatrix * travellerT.localToWorldMatrix;
-
-            Vector3 offsetFromPortal = travellerT.position - transform.position;
-            int portalSide = System.Math.Sign(Vector3.Dot(offsetFromPortal, transform.forward));
-            int portalSideOld = System.Math.Sign(Vector3.Dot(traveller.previousOffsetFromPortal, transform.forward));
-
-            // 如果物体从传送门的一侧跨越到了另一侧，则执行传送
-            if (portalSide != portalSideOld)
-            {
-                var positionOld = travellerT.position;
-                var rotOld = travellerT.rotation;
-
-                // 调用物体的传送逻辑（更新位置和旋转）
-                traveller.Teleport(transform, linkedPortal.transform, m.GetColumn(3), m.rotation);
-                // 传送后，为了视觉连贯性，将克隆体移动到传送前的位置
-                traveller.graphicsClone.transform.SetPositionAndRotation(positionOld, rotOld);
-
-                // 不能依赖 OnTriggerEnter/Exit，因为它们依赖于 FixedUpdate 的运行时间，手动触发进入逻辑
-                linkedPortal.OnTravellerEnterPortal(traveller);
-                trackedTravellers.RemoveAt(i);
-                i--;
-
-            }
-            else
-            {
-                // 如果还未穿过，则更新克隆体在另一侧门的位置，使其看起来像是从那边出来的
-                traveller.graphicsClone.transform.SetPositionAndRotation(m.GetColumn(3), m.rotation);
-                traveller.previousOffsetFromPortal = offsetFromPortal;
-            }
-        }
     }
 
     // 在本帧任何传送门摄像机开始渲染之前调用
@@ -157,6 +111,129 @@ public class Portal : MonoBehaviour
         // 渲染结束后恢复屏幕显示
         screen.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.On;
     }
+
+    // 在所有传送门渲染完毕，但在玩家摄像机渲染之前调用
+    public void PostPortalRender()
+    {
+        foreach (var traveller in trackedTravellers)
+        {
+            UpdateSliceParams(traveller);
+        }
+        ProtectScreenFromClipping(playerCam.transform.position);
+    }
+
+    // 碰撞触发时，所有挂载 PortalTraveller.cs 的物体加入正在穿越者列表
+    void OnTriggerEnter(Collider other)
+    {
+        var traveller = other.GetComponent<PortalTraveller>();
+        if (traveller)
+        {
+            OnTravellerEnterPortal(traveller);
+        }
+    }
+
+    // 碰撞结束时：
+    void OnTriggerExit(Collider other)
+    {
+        var traveller = other.GetComponent<PortalTraveller>();
+        if (traveller && trackedTravellers.Contains(traveller))
+        {
+            traveller.ExitPortalThreshold();
+            trackedTravellers.Remove(traveller);
+        }
+    }
+
+    #region 功能函数
+
+    // 创建 RT、将摄像机画面赋值给纹理
+    void CreateViewTexture()
+    {
+        // 如果 RenderTexture 不存在或屏幕尺寸改变，则重新创建
+        if (viewTexture == null || viewTexture.width != Screen.width || viewTexture.height != Screen.height)
+        {
+            if (viewTexture != null)
+            {
+                viewTexture.Release();
+            }
+            viewTexture = new RenderTexture(Screen.width, Screen.height, 0);
+            // 将传送门摄像机的视图渲染到纹理：指定 viewTexture 为 portalCam 的渲染输出目标
+            portalCam.targetTexture = viewTexture;
+            // 将此纹理显示在链接传送门的材质上（即玩家看到的画面）
+            linkedPortal.screen.material.SetTexture("_MainTex", viewTexture);
+        }
+    }
+
+    // 将碰撞物体加入穿越中列表的具体逻辑
+    void OnTravellerEnterPortal(PortalTraveller traveller)
+    {
+        if (!trackedTravellers.Contains(traveller))
+        {
+            traveller.EnterPortalThreshold();
+            traveller.previousOffsetFromPortal = traveller.transform.position - transform.position;
+            trackedTravellers.Add(traveller);
+        }
+    }
+
+    // 处理正在穿过门的物体：
+    // 穿过了：传送到对面
+    // 没穿过：实时显示（传送到那边，并在这边保留一个复制体）
+    void HandleTravellers()
+    {
+        // 遍历所有正在通过传送门的物体
+        for (int i = 0; i < trackedTravellers.Count; i++)
+        {
+            PortalTraveller traveller = trackedTravellers[i];
+            Transform travellerT = traveller.transform;
+
+            // 不使用逐个物体计算的旋转矩阵，改用相对计算
+            // var m = linkedPortal.transform.localToWorldMatrix * transform.worldToLocalMatrix * travellerT.localToWorldMatrix;
+
+            Vector3 offsetFromPortal = travellerT.position - transform.position;
+            // 通过对比上一帧和当前帧物体所在的正反面（portalSide 是否等于 portalSideOld）。一旦符号反转，说明物体在这一帧穿过了传送门平面，立刻执行 Teleport。
+            int portalSide = System.Math.Sign(Vector3.Dot(offsetFromPortal, transform.forward));
+            int portalSideOld = System.Math.Sign(Vector3.Dot(traveller.previousOffsetFromPortal, transform.forward));
+
+            // 如果物体从传送门的一侧跨越到了另一侧，则执行传送
+            if (portalSide != portalSideOld)
+            {
+                var positionOld = travellerT.position;
+                var rotOld = travellerT.rotation;
+
+                // ===================== 优化：无矩阵的传送计算（替代原m变量）=====================
+                Vector3 localPos = transform.InverseTransformPoint(travellerT.position);
+                Quaternion localRot = Quaternion.Inverse(transform.rotation) * travellerT.rotation;
+                Vector3 targetPos = linkedPortal.transform.TransformPoint(localPos);
+                Quaternion targetRot = linkedPortal.transform.rotation * localRot;
+
+                // 调用物体的传送逻辑
+                traveller.Teleport(transform, linkedPortal.transform, targetPos, targetRot);
+                traveller.graphicsClone.transform.SetPositionAndRotation(positionOld, rotOld);
+
+                // 不能依赖 OnTriggerEnter/Exit，因为它们依赖于 FixedUpdate 的运行时间
+                // 这里将其手动指定到 LateUpdate() 更新
+                linkedPortal.OnTravellerEnterPortal(traveller);
+                trackedTravellers.RemoveAt(i);
+                i--;
+            }
+            else
+            {
+                // 如果还未穿过，则更新克隆体在另一侧门的位置，使其看起来像是从那边出来的
+                // 1. 计算物体相对于当前传送门的本地位置（兼容所有Unity版本）
+                Vector3 localRelativePos = transform.InverseTransformPoint(travellerT.position);
+                // 2. 计算物体相对于当前传送门的本地旋转（兼容所有Unity版本，替代InverseTransformRotation）
+                Quaternion localRelativeRot = Quaternion.Inverse(transform.rotation) * travellerT.rotation;
+                // 3. 转换为链接传送门的世界坐标/旋转
+                Vector3 cloneWorldPos = linkedPortal.transform.TransformPoint(localRelativePos);
+                Quaternion cloneWorldRot = linkedPortal.transform.rotation * localRelativeRot;
+
+                // 同步克隆体
+                traveller.graphicsClone.transform.SetPositionAndRotation(cloneWorldPos, cloneWorldRot);
+
+                traveller.previousOffsetFromPortal = offsetFromPortal;
+            }
+        }
+    }
+
     // 修复物体穿越问题
     void HandleClipping()
     {
@@ -224,34 +301,6 @@ public class Portal : MonoBehaviour
             {
                 linkedTraveller.SetSliceOffsetDst(-screenThickness, false);
             }
-        }
-    }
-
-    // 在所有传送门渲染完毕，但在玩家摄像机渲染之前调用
-    public void PostPortalRender()
-    {
-        foreach (var traveller in trackedTravellers)
-        {
-            UpdateSliceParams(traveller);
-        }
-        ProtectScreenFromClipping(playerCam.transform.position);
-    }
-
-    // 创建 RT、将摄像机画面赋值给纹理
-    void CreateViewTexture()
-    {
-        // 如果 RenderTexture 不存在或屏幕尺寸改变，则重新创建
-        if (viewTexture == null || viewTexture.width != Screen.width || viewTexture.height != Screen.height)
-        {
-            if (viewTexture != null)
-            {
-                viewTexture.Release();
-            }
-            viewTexture = new RenderTexture(Screen.width, Screen.height, 0);
-            // 将传送门摄像机的视图渲染到纹理：指定 viewTexture 为 portalCam 的渲染输出目标
-            portalCam.targetTexture = viewTexture;
-            // 将此纹理显示在链接传送门的材质上（即玩家看到的画面）
-            linkedPortal.screen.material.SetTexture("_MainTex", viewTexture);
         }
     }
 
@@ -350,40 +399,16 @@ public class Portal : MonoBehaviour
         }
     }
 
-    void OnTravellerEnterPortal(PortalTraveller traveller)
-    {
-        if (!trackedTravellers.Contains(traveller))
-        {
-            traveller.EnterPortalThreshold();
-            traveller.previousOffsetFromPortal = traveller.transform.position - transform.position;
-            trackedTravellers.Add(traveller);
-        }
-    }
 
-    void OnTriggerEnter(Collider other)
-    {
-        var traveller = other.GetComponent<PortalTraveller>();
-        if (traveller)
-        {
-            OnTravellerEnterPortal(traveller);
-        }
-    }
-
-    void OnTriggerExit(Collider other)
-    {
-        var traveller = other.GetComponent<PortalTraveller>();
-        if (traveller && trackedTravellers.Contains(traveller))
-        {
-            traveller.ExitPortalThreshold();
-            trackedTravellers.Remove(traveller);
-        }
-    }
+    #endregion 功能函数
 
     #region 一些辅助工具
 
     // 判断点在传送门的哪一侧
     int SideOfPortal(Vector3 pos)
     {
+        // 返回 1：在传送门的正面
+        // 返回 -1：在传送门的反面
         return System.Math.Sign(Vector3.Dot(pos - transform.position, transform.forward));
     }
 
