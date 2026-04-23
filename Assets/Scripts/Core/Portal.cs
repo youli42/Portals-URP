@@ -465,6 +465,8 @@ public class Portal : MonoBehaviour
         {
             Vector4 clipPlaneCameraSpace = new Vector4(camSpaceNormal.x, camSpaceNormal.y, camSpaceNormal.z, camSpaceDst);
             Matrix4x4 obliqueMatrix = playerCam.CalculateObliqueMatrix(clipPlaneCameraSpace);
+
+            portalCam.projectionMatrix = obliqueMatrix; // 将结果传递给 摄像机
         }
         else
         {
