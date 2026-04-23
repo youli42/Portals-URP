@@ -17,6 +17,7 @@ public class Portal : MonoBehaviour
 
     // 私有变量
     RenderTexture viewTexture;
+    RenderTexture tempTexture; // 双缓冲，以在 URP 中支持嵌套显示
     Camera portalCam; // 传送门专用摄像机
     Camera playerCam; // 玩家摄像机
     Material firstRecursionMat; // 递归时，优化第一层门的渲染效果
@@ -55,10 +56,7 @@ public class Portal : MonoBehaviour
     // 调用顺序在 PrePortalRender 之后，PostPortalRender 之前
     public void Render(ScriptableRenderContext context)
     {
-        if (!CameraUtility.VisibleFromCamera(linkedPortal.screen, playerCam))
-        {
-            return;
-        }
+        if (!CameraUtility.VisibleFromCamera(linkedPortal.screen, playerCam)) return;
 
         CreateViewTexture();
 
@@ -73,10 +71,7 @@ public class Portal : MonoBehaviour
         {
             if (i > 0)
             {
-                if (!CameraUtility.BoundsOverlap(screenMeshFilter, linkedPortal.screenMeshFilter, portalCam))
-                {
-                    break;
-                }
+                if (!CameraUtility.BoundsOverlap(screenMeshFilter, linkedPortal.screenMeshFilter, portalCam)) break;
             }
             localToWorldMatrix = transform.localToWorldMatrix * linkedPortal.transform.worldToLocalMatrix * localToWorldMatrix;
             int renderOrderIndex = recursionLimit - i - 1;
@@ -88,7 +83,12 @@ public class Portal : MonoBehaviour
         }
 
         screen.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.ShadowsOnly;
-        linkedPortal.screen.material.SetInt("displayMask", 0);
+
+        // 初始化一个 PropertyBlock，并在循环前隐藏传送门
+        MaterialPropertyBlock block = new MaterialPropertyBlock();
+        linkedPortal.screen.GetPropertyBlock(block);
+        block.SetInt("displayMask", 0);
+        linkedPortal.screen.SetPropertyBlock(block);
 
         for (int i = startIndex; i < recursionLimit; i++)
         {
@@ -96,17 +96,41 @@ public class Portal : MonoBehaviour
             SetNearClipPlane();
             HandleClipping();
 
-            // ================= 核心修改 =================
-            // 修改前：portalCam.Render();
-            // 修改后：使用 URP 专用的单相机渲染接口
-            UniversalRenderPipeline.RenderSingleCamera(context, portalCam);
-            // ============================================
+            // --- 核心双缓冲逻辑 ---
+            // 每一层渲染，我们交替使用 viewTexture 和 tempTexture
+            // 确保“正在画的”和“正在看的”不是同一个纹理
+            // 彻底移除 Graphics.Blit
+            int passesRemaining = recursionLimit - i;
+            bool renderToViewTex = (passesRemaining % 2 != 0);
 
-            if (i == startIndex)
+            RenderTexture currentTarget = renderToViewTex ? viewTexture : tempTexture;
+            RenderTexture previousResult = renderToViewTex ? tempTexture : viewTexture;
+
+            portalCam.targetTexture = currentTarget;
+
+            // 让当前镜头看到的门，显示上一层渲染出的画面
+            if (i > startIndex)
             {
-                linkedPortal.screen.material.SetInt("displayMask", 1);
+                // 使用 MaterialPropertyBlock 强制绕过材质缓存，立即更新纹理
+                linkedPortal.screen.GetPropertyBlock(block);
+
+                // 潜在排查提示：如果在极少数情况下仍然无效，且你的 Shader 是 URP Lit/Unlit，
+                // 这里的 "_MainTex" 可能需要改为 "_BaseMap"。但在你目前的状况下 _MainTex 应该没问题。
+                block.SetTexture("_MainTex", previousResult);
+                block.SetInt("displayMask", 1);
+
+                linkedPortal.screen.SetPropertyBlock(block);
             }
+
+            // 执行 URP 渲染
+            UniversalRenderPipeline.RenderSingleCamera(context, portalCam);
         }
+
+        // 最后阶段同样使用 MaterialPropertyBlock
+        linkedPortal.screen.GetPropertyBlock(block);
+        block.SetTexture("_MainTex", viewTexture);
+        block.SetInt("displayMask", 1);
+        linkedPortal.screen.SetPropertyBlock(block);
 
         screen.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.On;
     }
@@ -148,15 +172,16 @@ public class Portal : MonoBehaviour
     void CreateViewTexture()
     {
         // 如果 RenderTexture 不存在或屏幕尺寸改变，则重新创建
-        if (viewTexture == null || viewTexture.width != Screen.width || viewTexture.height != Screen.height)
+        if (viewTexture == null || tempTexture == null || viewTexture.width != Screen.width || viewTexture.height != Screen.height)
         {
-            if (viewTexture != null)
-            {
-                viewTexture.Release();
-            }
-            viewTexture = new RenderTexture(Screen.width, Screen.height, 24); // fix：使用 24 位深度，确保不会被天空覆盖
-            // 将传送门摄像机的视图渲染到纹理：指定 viewTexture 为 portalCam 的渲染输出目标
+            if (viewTexture != null) viewTexture.Release();
+            if (tempTexture != null) tempTexture.Release();
+
+            viewTexture = new RenderTexture(Screen.width, Screen.height, 24);
+            tempTexture = new RenderTexture(Screen.width, Screen.height, 24); // fix:增加实例化
+
             portalCam.targetTexture = viewTexture;
+
             // 将此纹理显示在链接传送门的材质上（即玩家看到的画面）
             linkedPortal.screen.material.SetTexture("_MainTex", viewTexture);
         }
