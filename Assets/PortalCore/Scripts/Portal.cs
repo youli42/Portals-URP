@@ -16,6 +16,10 @@ public class Portal : MonoBehaviour
     [Tooltip("递归渲染限制。禁用双缓冲时强制为1。")]
     public int recursionLimit = 5; // 递归渲染限制，决定你能通过传送门看到多少层“门中门”
 
+    [Header("3D Portal Settings")]
+    public bool is3DPortal = false; // 3D 模式开关
+    private Collider portalCollider; // 自身的碰撞器
+
     [Header("Advanced Settings")]
     public float nearClipOffset = 0.05f; // 斜向裁剪面的偏移量，防止产生 Z-fighting
     public float nearClipLimit = 0.2f;   // 裁剪平面安全阈值，相机离门太近时，禁用斜向裁剪，避免严重画面畸变。
@@ -69,6 +73,7 @@ public class Portal : MonoBehaviour
 
         // 设置初始遮罩，用于处理递归渲染时的显示层级
         screen.material.SetInt("displayMask", 1);
+
     }
 
     // 在 Start 阶段检查外部依赖（确保所有对象的 Awake 已执行完毕）
@@ -438,8 +443,11 @@ public class Portal : MonoBehaviour
 
         Transform screenT = screen.transform;
         bool camFacingSameDirAsPortal = Vector3.Dot(transform.forward, transform.position - viewPoint) > 0;
-        // 动态调整屏幕物体的缩放和位置，使其略微“凸出”或“凹进”
-        //  screenT.localScale = new Vector3(screenT.localScale.x, screenT.localScale.y, screenThickness);
+        if (!is3DPortal)
+        {
+            // 动态调整屏幕物体的缩放和位置，使其略微“凸出”或“凹进”
+            screenT.localScale = new Vector3(screenT.localScale.x, screenT.localScale.y, screenThickness);
+        }
         screenT.localPosition = Vector3.forward * screenThickness * ((camFacingSameDirAsPortal) ? 0.5f : -0.5f);
         return screenThickness;
     }
@@ -490,31 +498,46 @@ public class Portal : MonoBehaviour
     // 注意：这会影响深度缓冲区的精度，可能导致屏幕空间 AO 等效果出现问题
     void SetNearClipPlane()
     {
-        // 1. 强制同步摄像机基础标量参数，防止 URP Culling 使用旧数据
-        portalCam.nearClipPlane = playerCam.nearClipPlane;
+        // 基础参数同步
+        portalCam.projectionMatrix = playerCam.projectionMatrix;
         portalCam.farClipPlane = playerCam.farClipPlane;
         portalCam.fieldOfView = playerCam.fieldOfView;
         portalCam.aspect = playerCam.aspect;
 
-        Transform clipPlane = transform;
-        int dot = System.Math.Sign(Vector3.Dot(clipPlane.forward, transform.position - portalCam.transform.position));
-
-        Vector3 camSpacePos = portalCam.worldToCameraMatrix.MultiplyPoint(clipPlane.position);
-        Vector3 camSpaceNormal = portalCam.worldToCameraMatrix.MultiplyVector(clipPlane.forward) * dot;
-
-        float camSpaceDst = -Vector3.Dot(camSpacePos, camSpaceNormal) + nearClipOffset;
-
-        // 2. 只有在安全距离外，才尝试计算斜裁剪面
-        if (Mathf.Abs(camSpaceDst) > nearClipLimit)
+        if (!is3DPortal)
         {
-            Vector4 clipPlaneCameraSpace = new Vector4(camSpaceNormal.x, camSpaceNormal.y, camSpaceNormal.z, camSpaceDst);
-            Matrix4x4 obliqueMatrix = playerCam.CalculateObliqueMatrix(clipPlaneCameraSpace);
+            // --- 原有的斜投影平面逻辑 ---
+            Transform clipPlane = transform;
+            int dot = System.Math.Sign(Vector3.Dot(clipPlane.forward, transform.position - portalCam.transform.position));
+            Vector3 camSpacePos = portalCam.worldToCameraMatrix.MultiplyPoint(clipPlane.position);
+            Vector3 camSpaceNormal = portalCam.worldToCameraMatrix.MultiplyVector(clipPlane.forward) * dot;
+            float camSpaceDst = -Vector3.Dot(camSpacePos, camSpaceNormal) + nearClipOffset;
 
-            portalCam.projectionMatrix = obliqueMatrix; // 将结果传递给 摄像机
+            if (Mathf.Abs(camSpaceDst) > nearClipLimit)
+            {
+                Vector4 clipPlaneCameraSpace = new Vector4(camSpaceNormal.x, camSpaceNormal.y, camSpaceNormal.z, camSpaceDst);
+                portalCam.projectionMatrix = playerCam.CalculateObliqueMatrix(clipPlaneCameraSpace);
+            }
         }
         else
         {
-            portalCam.projectionMatrix = playerCam.projectionMatrix;
+            // 1. 修改：直接使用传送门自身的中心位置，不再计算最近点
+            Vector3 portalCenter = transform.position;
+
+            // 2. 将该中心点转换到传送门相机的本地空间（观察空间）
+            Vector3 centerInCamSpace = portalCam.worldToCameraMatrix.MultiplyPoint(portalCenter);
+
+            // 3. 修正深度值计算（关键！）
+            // Unity 观察空间中，相机前方是 -Z，所以要取负号得到正的距离
+            float distanceToCenter = -centerInCamSpace.z;
+
+            // 4. 计算动态近裁剪面 
+            // 让裁剪面比中心点稍微靠前一点（减去 Offset），避免刚好裁掉传送门
+            // 同时确保不小于相机原本的最小近裁剪面
+            float dynamicNearClip = Mathf.Max(playerCam.nearClipPlane, distanceToCenter - nearClipOffset);
+
+            // 5. 应用近裁剪面距离
+            portalCam.nearClipPlane = dynamicNearClip;
         }
     }
 
