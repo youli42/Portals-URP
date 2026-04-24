@@ -8,6 +8,23 @@
 
 > 测试中，使用安装 Blender4.3 的设备无法启动项目，进度会卡在加载 Blander 模型。但 Blender4.4 可以。
 
+# 使用方法
+
+## 传送门
+
+创建一个空组件作为传送门时，他有一些必要配置，以确保传送门可以正常运行：
+
+添加组件：
+
+1. [Portal](Assets/PortalCore/Scripts/Portal.cs) 脚本：获取传送门渲染能力，指定**链接对象**和**传送门显示区域**
+2. Box Collider：【传送物体】或者其他碰撞体：勾选 **是触发体**，以正常传送物体。
+3. Rigidbody：取消重力
+
+添加子对象：
+
+1. 摄像机对象：直接添加即可，会自动使用。
+2. 平面模型：用作屏幕，需要使用 [Portal](Assets/PortalCore/Shader/Portal.shader) 材质（作为示例，可以直接使用  [M_PortalScreen](Assets/PortalCore/Material/M_PortalScreen.mat) ）
+
 # 原始 Readme
 Little test of portals in Unity.
 

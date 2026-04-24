@@ -1,4 +1,4 @@
-﻿// Upgrade NOTE: replaced '_Object2World' with 'unity_ObjectToWorld'
+﻿// 升级提示：已将 '_Object2World' 替换为 'unity_ObjectToWorld'
 
 Shader "Demo/CloudTest"
 {
@@ -16,10 +16,10 @@ Shader "Demo/CloudTest"
         LOD 200
 
         CGPROGRAM
-        // Physically based Standard lighting model, and enable shadows on all light types
+        // 基于物理的标准光照模型，并启用所有光源类型的阴影
         #pragma surface surf Standard fullforwardshadows vertex:vert addshadow
 
-        // Use shader model 3.0 target, to get nicer looking lighting
+        // 使用 Shader Model 3.0 目标，以获得更精细的光照效果
         #pragma target 3.0
 
         sampler2D _MainTex;
@@ -31,6 +31,7 @@ Shader "Demo/CloudTest"
 
         void vert(inout appdata_full data){
             float3 worldVert = mul (unity_ObjectToWorld, data.vertex);
+            // 被注释的代码（顶点动画）：根据时间和世界坐标产生正弦波位移
             //data.vertex.xyz += sin(_Time.x + data.vertex.xyz + worldVert * .1) * .2;
         }
 
@@ -39,19 +40,20 @@ Shader "Demo/CloudTest"
         fixed4 _Color;
         fixed4 _Emission;
 
-        // Add instancing support for this shader. You need to check 'Enable Instancing' on materials that use the shader.
-        // See https://docs.unity3d.com/Manual/GPUInstancing.html for more information about instancing.
+        // 为此着色器添加 GPU 实例化（Instancing）支持。你需要在使用了该着色器的材质上勾选“启用实例化”（Enable Instancing）。
+        // 有关实例化的更多信息，请参阅 https://docs.unity3d.com/Manual/GPUInstancing.html
+        // 开启统一缩放假设
         // #pragma instancing_options assumeuniformscaling
         UNITY_INSTANCING_BUFFER_START(Props)
-            // put more per-instance properties here
+            // 在此处放置更多每个实例（per-instance）的属性
         UNITY_INSTANCING_BUFFER_END(Props)
 
         void surf (Input IN, inout SurfaceOutputStandard o)
         {
-            // Albedo comes from a texture tinted by color
+            // 反射率（Albedo）来自受 _Color 变量调节的纹理
             fixed4 c = tex2D (_MainTex, IN.uv_MainTex) * _Color;
             o.Albedo = c.rgb;
-            // Metallic and smoothness come from slider variables
+            // 金属度（Metallic）和光滑度（Smoothness）来自滑动条变量
             o.Metallic = _Metallic;
             o.Smoothness = _Glossiness;
             o.Emission = _Emission;
