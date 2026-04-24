@@ -141,7 +141,6 @@ public class Portal : MonoBehaviour
         for (int i = startIndex; i < recursionLimit; i++)
         {
             portalCam.transform.SetPositionAndRotation(renderPositions[i], renderRotations[i]);
-            SetNearClipPlane();
             HandleClipping();
 
             // --- 核心双缓冲逻辑 ---
@@ -439,7 +438,6 @@ public class Portal : MonoBehaviour
         Transform screenT = screen.transform;
         bool camFacingSameDirAsPortal = Vector3.Dot(transform.forward, transform.position - viewPoint) > 0;
         // 动态调整屏幕物体的缩放和位置，使其略微“凸出”或“凹进”
-        screenT.localScale = new Vector3(screenT.localScale.x, screenT.localScale.y, screenThickness);
         screenT.localPosition = Vector3.forward * screenThickness * ((camFacingSameDirAsPortal) ? 0.5f : -0.5f);
         return screenThickness;
     }
@@ -484,40 +482,6 @@ public class Portal : MonoBehaviour
             traveller.cloneMaterials[i].SetFloat("sliceOffsetDst", cloneSliceOffsetDst);
         }
     }
-
-    // 创建贴合远程传送门的斜投影近平面：
-    // 使用自定义投影矩阵，使传送门摄像机的近裁剪面与传送门表面重合
-    // 注意：这会影响深度缓冲区的精度，可能导致屏幕空间 AO 等效果出现问题
-    void SetNearClipPlane()
-    {
-        // 1. 强制同步摄像机基础标量参数，防止 URP Culling 使用旧数据
-        portalCam.nearClipPlane = playerCam.nearClipPlane;
-        portalCam.farClipPlane = playerCam.farClipPlane;
-        portalCam.fieldOfView = playerCam.fieldOfView;
-        portalCam.aspect = playerCam.aspect;
-
-        Transform clipPlane = transform;
-        int dot = System.Math.Sign(Vector3.Dot(clipPlane.forward, transform.position - portalCam.transform.position));
-
-        Vector3 camSpacePos = portalCam.worldToCameraMatrix.MultiplyPoint(clipPlane.position);
-        Vector3 camSpaceNormal = portalCam.worldToCameraMatrix.MultiplyVector(clipPlane.forward) * dot;
-
-        float camSpaceDst = -Vector3.Dot(camSpacePos, camSpaceNormal) + nearClipOffset;
-
-        // 2. 只有在安全距离外，才尝试计算斜裁剪面
-        if (Mathf.Abs(camSpaceDst) > nearClipLimit)
-        {
-            Vector4 clipPlaneCameraSpace = new Vector4(camSpaceNormal.x, camSpaceNormal.y, camSpaceNormal.z, camSpaceDst);
-            Matrix4x4 obliqueMatrix = playerCam.CalculateObliqueMatrix(clipPlaneCameraSpace);
-
-            portalCam.projectionMatrix = obliqueMatrix; // 将结果传递给 摄像机
-        }
-        else
-        {
-            portalCam.projectionMatrix = playerCam.projectionMatrix;
-        }
-    }
-
 
     #endregion 功能函数
 
