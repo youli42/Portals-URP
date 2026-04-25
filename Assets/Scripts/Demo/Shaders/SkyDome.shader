@@ -72,14 +72,26 @@
 
             float4 frag(Varyings IN) : SV_Target
             {
-                // --- 1. 原有天空渐变逻辑 ---
-                float t = saturate(1.0 - IN.uv.y);
-                float4 col = lerp(_BottomColor, _MiddleColor, saturate(t * 2.0));
-                col = lerp(col, _TopColor, saturate((t - 0.5) * 2.0));
-
-                // --- 2. 太阳绘制逻辑 ---
                 // 计算精确的视线方向 (从摄像机指向顶点)
                 float3 viewDirWS = normalize(IN.positionWS - _WorldSpaceCameraPos);
+
+                // 获取仰角高度值，范围严格在 [-1, 1] 之间
+                float height = viewDirWS.y;
+
+                // --- 基于方向向量重构天空渐变逻辑 ---
+                // 当 height 从 0 增加到 1 时，属于地平线到天空顶部的渐变
+                float topBlend = saturate(height); 
+                // 当 height 从 0 减小到 -1 时，属于地平线到脚底的渐变
+                float bottomBlend = saturate(-height);
+
+                // 首先设定基础色为中间色 (地平线颜色)
+                float4 col = _MiddleColor;
+                // 向上混合天顶色
+                col = lerp(col, _TopColor, topBlend);
+                // 向下混合底部色
+                col = lerp(col, _BottomColor, bottomBlend);
+
+                // --- 2. 太阳绘制逻辑 ---
 
                 // 获取主光源数据 (包含方向)
                 Light mainLight = GetMainLight();
